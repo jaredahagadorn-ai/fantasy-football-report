@@ -22,11 +22,11 @@ console.log('Scheduler running. Fires every Saturday at 8am.');
 async function sendWeeklyReport() {
   try {
     const dateStr = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-    const year = new Date().getMonth() >= 8 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-    const user = await sleeperGet('/user/' + SLEEPER_USERNAME);
-    if (!user?.user_id) throw new Error('User not found');
-    let leagues = await sleeperGet('/user/' + user.user_id + '/leagues/nfl/' + year) || [];
-    if (!leagues.length) leagues = await sleeperGet('/user/' + user.user_id + '/leagues/nfl/' + (year-1)) || [];
+    
+    const user = {user_id: '214107130326675456', display_name: 'jaredhagadorn'};
+    
+    const leagueData = await sleeperGet('/league/1330994757094109184');
+    const leagues = leagueData ? [leagueData] : [];
     if (!leagues.length) throw new Error('No leagues found');
     console.log('Found ' + leagues.length + ' leagues');
     const allPlayers = await sleeperGet('/players/nfl') || {};
@@ -54,12 +54,12 @@ async function buildLeagueSection(league, user, allPlayers) {
   const myRoster = (rosters||[]).find(r => r.owner_id === user.user_id);
   if (!myRoster) return null;
   const myPicks = (tradedPicks||[]).filter(p => p.owner_id === user.user_id);
-  const myPlayers = (myRoster.players||[]).map(id => playerInfo(id, allPlayers)).filter(p => p.name !== id);
+  const myPlayers = (myRoster.players||[]).map(pid => playerInfo(pid, allPlayers)).filter(p => p.name !== p.id);
   const lType = leagueType(league);
   const rankedTeams = (rosters||[]).map(r => {
     const owner = (leagueUsers||[]).find(u => u.user_id === r.owner_id);
     const name = owner?.metadata?.team_name || owner?.display_name || 'Team ' + r.roster_id;
-    const players = (r.players||[]).map(id => playerInfo(id, allPlayers)).filter(p => ['QB','RB','WR','TE'].includes(p.pos));
+    const players = (r.players||[]).map(pid => playerInfo(pid, allPlayers)).filter(p => ['QB','RB','WR','TE'].includes(p.pos));
     return { name, isMe: r.owner_id === user.user_id, wins: r.settings?.wins||0, losses: r.settings?.losses||0, score: dynastyScore(r.players||[], allPlayers), topPlayers: players.slice(0,6) };
   }).sort((a,b) => b.score - a.score);
   console.log('  Running AI analysis for ' + league.name);
@@ -79,12 +79,18 @@ async function buildLeagueSection(league, user, allPlayers) {
   return { league, lType, myPlayers, myPicks, rankedTeams, analysis, comparison, playerNews };
 }
 
-async function callGemini(prompt, useSearch) {
-  try {
-    const model = genAI.getGenerativeModel({ model: MODEL, ...(useSearch ? { tools:[{ googleSearch:{} }] } : {}) });
-    const result = await model.generateContent(prompt);
-    return result.response.text();
-  } catch(e) { return 'Analysis unavailable: ' + e.message; }
+async function callGemini(prompt, useSearch, retries=5) {
+  for (let attempt=1; attempt<=retries; attempt++) {
+    try {
+      const model = genAI.getGenerativeModel({ model: MODEL, ...(useSearch ? { tools:[{ googleSearch:{} }] } : {}) });
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    } catch(e) {
+      console.log('  Gemini attempt '+attempt+'/'+retries+' failed: '+e.message);
+      if (attempt < retries) { const w=attempt*5000; console.log('  Retrying in '+(w/1000)+'s...'); await sleep(w); }
+      else { return 'Analysis unavailable after '+retries+' attempts: '+e.message; }
+    }
+  }
 }
 
 function buildEmailHtml(dateStr, sections) {
@@ -119,10 +125,10 @@ async function sleeperGet(path) {
   try { const r = await axios.get(SLEEPER_BASE + path, {timeout:30000}); return r.data; }
   catch(e) { console.error('Sleeper error:', path, e.message); return null; }
 }
-function playerInfo(id, allPlayers) {
-  const p = allPlayers[id];
-  if (!p) return {id, name:id, pos:'?', team:'FA', age:null};
-  return {id, name:(p.first_name||'') + ' ' + (p.last_name||''), pos:p.position||'?', team:p.team||'FA', age:p.age||null};
+function playerInfo(pid, allPlayers) {
+  const p = allPlayers[pid];
+  if (!p) return {id: pid, name:id, pos:'?', team:'FA', age:null};
+  return {id: pid, name:(p.first_name||'') + ' ' + (p.last_name||''), pos:p.position||'?', team:p.team||'FA', age:p.age||null};
 }
 function dynastyScore(ids, allPlayers) {
   let s=0; ids.forEach(id => { const p=allPlayers[id]; if(!p||!['QB','RB','WR','TE'].includes(p.position)) return; s += p.age<=23?4:p.age<=25?3:p.age<=28?2:1; }); return Math.min(99,s);
