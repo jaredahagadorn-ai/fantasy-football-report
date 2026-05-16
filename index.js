@@ -7,7 +7,7 @@ const { OpenAI } = require('openai');
 const SLEEPER_BASE = 'https://api.sleeper.app/v1';
 const SLEEPER_USERNAME = 'jaredhagadorn';
 const EMAIL_TO = 'jaredahagadorn@gmail.com';
-const MODEL = 'openai/gpt-4.1';
+const MODEL = 'openai/gpt-4o';
 const MAX_LEAGUES = 3;
 
 const githubAI = new OpenAI({
