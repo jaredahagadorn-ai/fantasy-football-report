@@ -2,18 +2,12 @@ require('dotenv').config();
 const cron = require('node-cron');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
-const { OpenAI } = require('openai');
-
 const SLEEPER_BASE = 'https://api.sleeper.app/v1';
+const GITHUB_MODELS_URL = 'https://models.github.ai/inference/chat/completions';
 const SLEEPER_USERNAME = 'jaredhagadorn';
 const EMAIL_TO = 'jaredahagadorn@gmail.com';
 const MODEL = 'openai/gpt-4o';
 const MAX_LEAGUES = 3;
-
-const githubAI = new OpenAI({
-  baseURL: 'https://models.github.ai/inference',
-  apiKey: process.env.GITHUB_TOKEN,
-});
 
 cron.schedule('0 8 * * 6', () => {
   console.log('[cron] Saturday 8am fired');
@@ -139,16 +133,18 @@ function computeMyPicks(myRosterId, tradedPicks, league) {
 async function callAI(prompt, retries=3) {
   for (let attempt=1; attempt<=retries; attempt++) {
     try {
-      const response = await githubAI.chat.completions.create({
-        model: MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 1500,
-      });
-      return response.choices[0].message.content;
+      const response = await axios.post(
+        GITHUB_MODELS_URL,
+        { model: MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 1500 },
+        { headers: { 'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`, 'Content-Type': 'application/json' }, timeout: 60000 }
+      );
+      return response.data.choices[0].message.content;
     } catch(e) {
-      console.log('  AI attempt '+attempt+'/'+retries+' failed: '+e.message);
+      const status = e.response?.status;
+      const body = JSON.stringify(e.response?.data || e.message);
+      console.log(`  AI attempt ${attempt}/${retries} failed: HTTP ${status} — ${body}`);
       if (attempt < retries) { const w=attempt*5000; console.log('  Retrying in '+(w/1000)+'s...'); await sleep(w); }
-      else { return 'Analysis unavailable after '+retries+' attempts: '+e.message; }
+      else { return `Analysis unavailable: HTTP ${status} — ${body}`; }
     }
   }
 }
